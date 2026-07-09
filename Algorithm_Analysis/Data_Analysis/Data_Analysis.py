@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Tools for generating and displaying confusion matrices.
+# Tools for creating and displaying confusion matrices.
 from sklearn.metrics import (
     confusion_matrix,
     ConfusionMatrixDisplay
@@ -14,20 +14,21 @@ from sklearn.metrics import (
 # Evaluation parameters
 # ---------------------------------------------------------
 
-# Maximum allowable localisation error.
+# Maximum localisation error (metres).
 #
-# Only detections within this distance (metres) are
-# considered valid matches.
+# A predicted object is considered a valid match only if
+# it is within this distance of the corresponding
+# ground-truth object.
 #
-# Typical values:
-#   0.25 m
-#   0.50 m
-#   0.75 m
-#   1.00 m
-err = 0.25
+# Example values:
+#   0.25
+#   0.50
+#   0.75
+#   1.00
+err = 1
 
 
-# Object classes used during evaluation.
+# List of evaluated object classes.
 #
 # "background" represents:
 #   - missed detections
@@ -41,7 +42,13 @@ classes = [
 ]
 
 
-# Initialise cumulative confusion matrix.
+# Initialise an empty confusion matrix.
+#
+# Rows:
+#     Ground-truth classes
+#
+# Columns:
+#     Predicted classes
 cm_tot = np.zeros(
     (len(classes), len(classes)),
     dtype=int
@@ -50,10 +57,12 @@ cm_tot = np.zeros(
 
 
 # ---------------------------------------------------------
-# Evaluate object configurations 1–8
+# Evaluate object configurations
 # ---------------------------------------------------------
 
+# Process configurations 1 through 8.
 for file_num in range(1, 9):
+
 
     filename = (
         f"observations_config_{file_num}.jsonl"
@@ -77,20 +86,21 @@ for file_num in range(1, 9):
 
 
     # -----------------------------------------------------
-    # Compare every observation to the ground truth
+    # Compare every observation
     # -----------------------------------------------------
 
     for j in range(len(df)):
 
+        # Current predicted detections.
         pred_det = df.iloc[j]["detections"]
 
 
-        # Lists used to build the confusion matrix.
+        # Lists passed into sklearn.
         true_labels = []
         pred_labels = []
 
 
-        # Tracks predictions that have already been matched.
+        # Keep track of predictions already assigned.
         used_predictions = set()
 
 
@@ -106,49 +116,42 @@ for file_num in range(1, 9):
             best_class = None
 
 
-            # Search through every predicted object.
+            # Search for the nearest prediction.
             for i, p in enumerate(pred_det):
 
-                # Skip predictions already assigned to another
-                # ground-truth object.
+                # Ignore predictions already matched.
                 if i in used_predictions:
                     continue
 
 
-                # Compute Euclidean distance between the
-                # ground-truth object and prediction.
+                # Calculate Euclidean distance between
+                # the true object and prediction.
                 dist = np.hypot(
                     t["x"] - p["x"],
                     t["y"] - p["y"]
                 )
 
 
-                # Keep the closest prediction regardless
-                # of object class.
+                # Keep the closest prediction.
                 if dist < best_dist:
 
                     best_dist = dist
                     best_idx = i
-
-                    # Save the predicted class.
                     best_class = p["class_name"]
 
 
-            # Store the true object class.
+            # Record the true object class.
             true_labels.append(
                 t["class_name"]
             )
 
 
             # -------------------------------------------------
-            # Determine whether the match is valid
+            # Accept or reject the match
             # -------------------------------------------------
 
-            # If the closest prediction lies within the
-            # localisation threshold, use its predicted class.
-            #
-            # This allows classification errors to appear
-            # naturally in the confusion matrix.
+            # Prediction must lie within the localisation
+            # threshold.
             if (
                 best_idx is not None
                 and
@@ -164,7 +167,7 @@ for file_num in range(1, 9):
 
             # No nearby prediction.
             #
-            # Record as a missed detection.
+            # Count as a missed detection.
             else:
 
                 pred_labels.append(
@@ -174,11 +177,9 @@ for file_num in range(1, 9):
 
 
         # -------------------------------------------------
-        # Count false positives
+        # Remaining predictions become false positives
         # -------------------------------------------------
 
-        # Any prediction that was never matched to a
-        # ground-truth object is considered a false positive.
         for i, p in enumerate(pred_det):
 
             if i not in used_predictions:
@@ -194,7 +195,7 @@ for file_num in range(1, 9):
 
 
         # -------------------------------------------------
-        # Compute confusion matrix for this observation
+        # Compute confusion matrix
         # -------------------------------------------------
 
         cm = confusion_matrix(
@@ -204,17 +205,18 @@ for file_num in range(1, 9):
         )
 
 
-        # Accumulate results.
+        # Accumulate into the overall confusion matrix.
         cm_tot += cm
 
 
 
 # ---------------------------------------------------------
-# Evaluate background-only configuration
+# Evaluate background-only scenes
 # ---------------------------------------------------------
 
-# Configuration 0 contains scenes where no objects
-# should be detected.
+# Configuration 0 contains scenes without objects.
+#
+# Every detection is therefore a false positive.
 df = pd.read_json(
     "observations_config_0.jsonl",
     lines=True
@@ -226,7 +228,7 @@ for j in range(len(df)):
     pred_det = df.iloc[j]["detections"]
 
 
-    # Skip observations without detections.
+    # Skip empty observations.
     if len(pred_det) == 0:
         continue
 
@@ -235,7 +237,8 @@ for j in range(len(df)):
     pred_labels = []
 
 
-    # Every detected object is a false positive.
+    # Every detected object is classified as
+    # a background false positive.
     for p in pred_det:
 
         true_labels.append(
@@ -259,16 +262,50 @@ for j in range(len(df)):
 
 
 # ---------------------------------------------------------
-# Display cumulative confusion matrix
+# Normalise confusion matrix
+# ---------------------------------------------------------
+
+# Convert integer counts into floating-point values.
+cm_norm = cm_tot.astype(float)
+
+
+# Divide every row by the total number of samples
+# belonging to that true class.
+#
+# After normalisation:
+#
+# Every row sums to approximately 1.
+#
+# This allows the confusion matrix to be interpreted
+# as percentages rather than absolute counts.
+cm_norm = (
+    cm_norm
+    /
+    cm_tot.sum(axis=1, keepdims=True)
+)
+
+
+# If a row contains no samples, division by zero
+# produces NaN values.
+#
+# Replace NaNs with zeros.
+cm_norm = np.nan_to_num(
+    cm_norm
+)
+
+
+
+# ---------------------------------------------------------
+# Display normalised confusion matrix
 # ---------------------------------------------------------
 
 disp = ConfusionMatrixDisplay(
-    confusion_matrix=cm_tot,
+    confusion_matrix=cm_norm,
     display_labels=classes
 )
 
 
-# Plot the confusion matrix.
+# Plot using a red colour map.
 disp.plot(cmap="Reds")
 
 
@@ -277,7 +314,7 @@ plt.xlabel("Predicted")
 plt.ylabel("True")
 
 
-# Add plot title.
+# Add title.
 plt.title("Confusion Matrix")
 
 
